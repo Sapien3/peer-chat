@@ -58,12 +58,11 @@ def take_notices(store):
 
 
 def notify(store, config, state_root):
-    """Coalesce state changes; native advisories do not consume task allowance.
+    """Warn a sender once per blocked message, never for idle state changes.
 
-    Codex peers get metadata control frames (no model wake). Claude peers get a
-    normal advisory from this actual listener because its native SendMessage
-    result is controlled by Claude. At most one notice per blocked message ID; state-only notices are
-    limited to one attempt per 30 seconds; no ambiguous automatic resend.
+    Codex peers get metadata control frames (no model wake). Claude's native
+    advisory can trigger a model turn, so only actual blocked work warrants it.
+    Record each attempt before writing; never retry an ambiguous notice.
     """
     from peer_chat import outbound, routed_config, verify_socket
     from peer_peers import all_peers, resolve_peer
@@ -80,43 +79,26 @@ def notify(store, config, state_root):
     for key, peer in all_peers(config).items():
         prior = store.get('notice:' + key)
         pending_rows = store.db.execute("SELECT id,created FROM messages WHERE peer=? AND kind='message' AND status='received' ORDER BY created LIMIT 1000", (key,)).fetchall()
+        if not pending_rows or current.get('reachable'):
+            continue
         unwarned = [r for r in pending_rows if not store.get('notice_message:' + key + ':' + r[0])]
         # Startup hooks can race the first message. Defer only that temporary
         # state; budget exhaustion and offline peers still warn immediately.
         startup = current.get('delivery_state') == 'awaiting_lifecycle_hook'
         eligible = [r for r in unwarned if not startup or now - r[1] >= STARTUP_NOTICE_GRACE]
-        if peer['kind'] == 'claude' and startup and unwarned and not eligible:
-            continue
         unseen = [r[0] for r in eligible][:20]
-        new_blocked_message = bool(peer['kind'] == 'claude' and unseen and not current.get('reachable'))
-        # Don't announce ordinary startup; do report a blocked first incoming
-        # message and transitions after a peer has used this connection.
-        used = store.db.execute("SELECT id FROM messages WHERE peer=? AND kind='message' ORDER BY created DESC LIMIT 1", (key,)).fetchone()
-        if not prior and not used and not recovery:
-            continue
-        # Active hooks and idle wake are both healthy. Normal turn boundaries
-        # should not interrupt Claude with "delivery available again" notices.
-        prior_signature = prior.get('signature', []) if prior else []
-        if (prior_signature[:1] == ['running'] and len(prior_signature) >= 2
-                and prior_signature[1] in ('active_hooks', 'idle_wake_enabled')
-                and current.get('reachable') and prior_signature[2:] == signature[2:]):
-            continue
-        if prior and not new_blocked_message and (prior.get('signature') == signature or now - prior.get('at', 0) < 30):
-            continue
-        if not prior and not current.get('warning') and not recovery:
-            store.put('notice:' + key, {'signature': signature, 'at': now, 'result': 'baseline'})
+        if not unseen:
             continue
         record = {'signature': signature, 'at': now, 'result': 'attempting'}
         store.put('notice:' + key, record)  # Before write: don't blindly retry an ambiguous notice.
-        if new_blocked_message:
-            for mid in unseen:
-                store.put('notice_message:' + key + ':' + mid, {
-                    'at': now, 'attempted': True, 'state': current.get('delivery_state'),
-                    'remaining': current.get('remaining')})
+        for mid in unseen:
+            store.put('notice_message:' + key + ':' + mid, {
+                'at': now, 'attempted': True, 'state': current.get('delivery_state'),
+                'remaining': current.get('remaining')})
         data = {'state': current.get('delivery_state'), 'remaining': current.get('remaining'),
-                'message_id': unseen[0] if new_blocked_message else None,
-                'message_ids': unseen if new_blocked_message else [],
-                'warning': current.get('warning') or 'Delivery ready. Retained messages are eligible for delivery; individual acknowledgements confirm receipt.'}
+                'message_id': unseen[0],
+                'message_ids': unseen,
+                'warning': current.get('warning') or 'Message retained; model delivery is currently blocked. Inspect peer-chat status.'}
         if recovery and (not prior or recovery.get('id') not in prior.get('signature', [])):
             data['warning'] = 'Listener recovered after an unexpected exit. ' + data['warning']
         try:

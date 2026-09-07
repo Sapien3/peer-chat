@@ -23,7 +23,8 @@ def main():
     files = {
         args.wheel.name: args.wheel.read_bytes(),
         'install.sh': (root / 'install.sh').read_bytes(),
-        'README.md': (root / 'docs/QUICKSTART.md').read_text().replace('peer-chat-0.5.4', f'peer-chat-{version}').encode(),
+        'README.md': re.sub(r'peer-chat-\d+\.\d+\.\d+', f'peer-chat-{version}',
+                            (root / 'docs/QUICKSTART.md').read_text()).encode(),
         'REFERENCE.md': (root / 'README.md').read_bytes(),
         'docs/VALIDATION.md': (root / 'docs/VALIDATION.md').read_bytes(),
     }

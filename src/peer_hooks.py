@@ -38,8 +38,10 @@ def routing_rejection(payload, config):
         if db.execute("SELECT 1 FROM sqlite_master WHERE name='thread_spawn_edges'").fetchone():
             if db.execute("SELECT 1 FROM thread_spawn_edges WHERE child_thread_id=? LIMIT 1", (config["thread"],)).fetchone():
                 return "child thread"
-    if not row or row[1]:
-        return "missing or archived thread"
+    if not row:
+        return "missing thread"
+    if row[1]:
+        return "archived thread"
     if not row[0] or Path(transcript).resolve() != Path(row[0]).resolve():
         return "transcript_path mismatch"
     return None
@@ -66,12 +68,13 @@ def deliver(payload, state_root=STATE_ROOT):
         if not config:
             return {}
         rejection = routing_rejection(payload, config)
-        store.put("hook_seen", {"at": time.time(), "event": event, "turn": payload.get("turn_id"),
+        # Rejected child hooks are diagnostics, never main-session lifecycle evidence.
+        store.put("hook_rejected" if rejection else "hook_seen", {"at": time.time(), "event": event, "turn": payload.get("turn_id"),
             "routing": "rejected: " + rejection if rejection else "matched",
             "owner_identity": (registration or {}).get('owner_identity', config.get('owner_identity'))})
         # Startup registration can precede persistence of the empty thread's
         # DB row. Presence is enough to mark idle, never to grant sender rights.
-        if rejection and not (registration and event == "SessionStart"):
+        if rejection and not (registration and event == "SessionStart" and rejection == "missing thread"):
             return {}
         from peer_budget import renew_for_owner_prompt
         renew_for_owner_prompt(store, payload)

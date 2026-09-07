@@ -189,10 +189,12 @@ recipient's delivery state. It includes a fresh destination snapshot and warning
 `retained_or_pending` never claims model receipt. A reply or explicit recipient
 acknowledgement is still required. Claude controls its native SendMessage result,
 so a blocked native send gets a separate ordinary bridge advisory instead.
-Advisories name the relevant message and remaining allowance and are coalesced
-per state transition. They request no reply and cannot renew a delivery window.
-Ordinary active/idle transitions do not generate availability notices. Blocked
-messages still receive an advisory, and recovery from a blocker is announced.
+Advisories name the relevant blocked messages and remaining allowance, with at
+most one attempt per message. They request no reply and cannot renew a delivery
+window. Empty inboxes, ordinary turn boundaries and recovery do not announce
+state changes to models. Inspect `peer-chat status` for current availability.
+Rejected subagent hooks appear separately as `hook_rejected` in status JSON;
+they cannot overwrite the main session's last accepted `hook_seen` event.
 Startup-hook warnings wait 20 seconds and disappear if delivery catches up first;
 budget exhaustion and offline-state warnings remain immediate.
 Codex advisories are metadata, surfaced at the next active hook without a wake.
@@ -286,7 +288,7 @@ uv build
 ```
 
 Build a colleague bundle from a tested wheel with
-`python3 scripts/package_share.py dist/local_peer_chat-0.5.4-py3-none-any.whl`.
+`python3 scripts/package_share.py dist/local_peer_chat-0.5.5-py3-none-any.whl`.
 It includes the wheel, installer, quick start, reference and checksums. Nothing
 is published to a package index. Ordinary tests use fixtures and never launch
 a model. Native configuration probes are separate and use temporary homes.

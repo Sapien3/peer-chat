@@ -24,7 +24,7 @@ import peer_platform as pp
 
 DB_TIMEOUT = 0.2
 META_KEYS = ("config", "runtime", "delivery", "remaining", "wake_remaining", "budget_limit", "phase",
-             "hook_seen", "stop", "worker_error", "restore_error", "wake_pending", "last_wake", "default_peer", "watch")
+             "hook_seen", "hook_rejected", "stop", "worker_error", "restore_error", "wake_pending", "last_wake", "default_peer", "watch")
 NON_CONSUMED = ("received", "queued", "hook_offered", "held", "forwarding", "queue_failed", "queue_uncertain")
 REACHABLE_STATES = ("active_hooks", "idle_wake_enabled")  # idle_live_only cannot wake the model
 RUNTIME_STATES = ("running", "listener_down", "owner_offline", "stopped", "unconfigured", "unreadable")
@@ -248,7 +248,7 @@ def snapshot(state_root, thread) -> Optional[dict]:
            "received_total": None, "acknowledged_total": None,
            "remaining": None, "wake_remaining": None, "wake_remaining_effective": None, "wake_remaining_source": None,
            "budget_limit": None, "phase": "unknown", "evidence_stale": False, "orphan": False,
-           "hook_seen": None, "hook_age_s": None, "peers": [], "default_peer": None, "default_peer_short": None,
+           "hook_seen": None, "hook_rejected": None, "hook_age_s": None, "peers": [], "default_peer": None, "default_peer_short": None,
            "runtime_pid": None, "owner_pid": None, "listener_alive": False, "socket_ok": False,
            "worker_error": None, "restore_error": None,
            "wake_pending": None, "error": None, "warning": None, "observed_at": time.time()}
@@ -306,6 +306,9 @@ def snapshot(state_root, thread) -> Optional[dict]:
         at = seen.get("at")
         if isinstance(at, (int, float)) and not isinstance(at, bool) and math.isfinite(at):
             row["hook_age_s"] = max(0, int(row["observed_at"] - at))
+    rejected = meta.get('hook_rejected')
+    if isinstance(rejected, dict):
+        row['hook_rejected'] = {k: rejected.get(k) for k in ('at', 'event', 'turn', 'routing')}
     watch = meta.get('watch')
     row['watch'] = {k: watch.get(k) for k in ('attempts','next_at','last_result','last_error','last_attempt','recovered_at','paused_until')} if isinstance(watch, dict) else None
     row["worker_error"] = meta.get("worker_error") if isinstance(meta.get("worker_error"), str) else None

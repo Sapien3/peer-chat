@@ -83,11 +83,13 @@ def test_pending_age_and_absent_timing_are_read_only(tmp_path):
 @pytest.mark.parametrize('prior,current,recovered,expected', [
     ('active_hooks', 'idle_wake_enabled', False, 0),
     ('idle_wake_enabled', 'active_hooks', False, 0),
-    ('paused_budget', 'active_hooks', False, 1),
-    ('active_hooks', 'idle_wake_enabled', True, 1),
-    ('active_hooks', 'paused_budget', False, 1),
+    ('paused_budget', 'active_hooks', False, 0),
+    ('active_hooks', 'idle_wake_enabled', True, 0),
+    ('active_hooks', 'paused_budget', False, 0),
+    ('active_hooks', 'awaiting_lifecycle_hook', False, 0),
+    ('awaiting_lifecycle_hook', 'idle_wake_enabled', False, 0),
 ])
-def test_notices_skip_healthy_turn_changes_but_keep_blockers_and_recovery(tmp_path, monkeypatch, prior, current, recovered, expected):
+def test_empty_inbox_never_announces_state_changes_or_recovery(tmp_path, monkeypatch, prior, current, recovered, expected):
     import peer_chat
     import peer_delivery as delivery
     store = Store(tmp_path / 'inbox.sqlite')
@@ -105,8 +107,6 @@ def test_notices_skip_healthy_turn_changes_but_keep_blockers_and_recovery(tmp_pa
     try:
         delivery.notify(store, config, tmp_path)
         assert len(calls) == expected
-        if expected and current == 'active_hooks':
-            assert 'Delivery ready.' in calls[0][1]
     finally:
         store.close()
 
@@ -177,4 +177,55 @@ def test_message_status_cli_routes_recipient_read_only(tmp_path, target):
     row = json.loads(output)[0]['message_status']['messages'][0]
     assert row['id'] == mid and row['status'] == 'received'
     assert 'SECRET' not in output
+    assert path.read_bytes() == before
+
+
+def test_blocked_notice_is_per_message_and_sender_not_state_change(tmp_path, monkeypatch):
+    import peer_chat
+    import peer_delivery as delivery
+    store = Store(tmp_path / 'inbox.sqlite')
+    config = {'thread': T1, 'peers': {key: {
+        'kind': 'claude', 'key': key, 'identity': key, 'pid': 1, 'socket': '/unused'
+    } for key in ('p', 'other')}}
+    store.put('runtime', {'pid': os.getpid()})
+    store.accept('p', {'kind': 'message', 'id': 'blocked', 'body': 'SECRET'})
+    current = {'runtime_state': 'running', 'delivery_state': 'paused_budget',
+               'reachable': False, 'remaining': 0, 'warning': 'budget exhausted'}
+    monkeypatch.setattr(delivery, 'view', lambda *_: current)
+    calls = []
+    monkeypatch.setattr(peer_chat, 'outbound', lambda *args, **kwargs: calls.append(args))
+    try:
+        delivery.notify(store, config, tmp_path)
+        assert len(calls) == 1 and 'blocked' in calls[0][1]
+        assert not store.get('notice:other')
+        # Alternating rejected/accepted hook status used to announce repeatedly.
+        for i in range(5):
+            for state in ('active_hooks', 'awaiting_lifecycle_hook', 'idle_wake_enabled', 'paused_budget'):
+                current.update(delivery_state=state, reachable=state in ('active_hooks', 'idle_wake_enabled'))
+                store.put('recovery_event', {'id': str(i)})
+                delivery.notify(store, config, tmp_path)
+        assert len(calls) == 1
+        store.accept('p', {'kind': 'message', 'id': 'second', 'body': 'SECRET'})
+        delivery.notify(store, config, tmp_path)
+        assert len(calls) == 2 and 'second' in calls[1][1]
+        assert 'SECRET' not in str(calls)
+        store.set_status('p', 'blocked', 'consumed')
+        store.set_status('p', 'second', 'hook_offered')
+        current.update(delivery_state='idle_wake_enabled', reachable=True)
+        delivery.notify(store, config, tmp_path)
+        assert len(calls) == 2
+    finally:
+        store.close()
+
+
+def test_rejected_hook_diagnostic_does_not_hide_accepted_lifecycle(tmp_path):
+    rejected = {'at': time.time(), 'event': 'PostToolUse', 'turn': 'child',
+                'routing': 'rejected: subagent marker', 'owner_identity': 'PRIVATE'}
+    path = make_bridge(tmp_path, T1, extra_meta={'hook_rejected': rejected})
+    before = path.read_bytes()
+    row = snapshot(tmp_path, T1)
+    assert row['delivery_state'] == 'active_hooks' and row['reachable']
+    assert row['hook_seen']['routing'] == 'matched'
+    assert row['hook_rejected']['routing'] == 'rejected: subagent marker'
+    assert 'PRIVATE' not in json.dumps(row)
     assert path.read_bytes() == before

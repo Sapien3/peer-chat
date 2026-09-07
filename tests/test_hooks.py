@@ -17,6 +17,7 @@ def inbox(tmp_path, monkeypatch):
     thread = str(uuid.uuid4())
     home = tmp_path / "codex"
     home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
     transcript = str(home / "main-transcript.jsonl")
     with sqlite3.connect(home / "state_5.sqlite") as db:
         db.execute("CREATE TABLE threads(id TEXT,rollout_path TEXT,archived INT)")
@@ -155,3 +156,52 @@ def test_only_owner_prompt_renews_exhausted_delivery_window(inbox):
     assert store.get("remaining") == 11 and store.get("wake_remaining") == 12
     peer_hooks.deliver(owner_prompt, state)
     assert store.get("remaining") == 11  # Same event cannot reset spending.
+
+
+@pytest.mark.parametrize('event', ['PostToolUse', 'Stop', 'UserPromptSubmit', 'SessionStart'])
+@pytest.mark.parametrize('change', [
+    {'agent_id': 'child'}, {'agent_type': 'reviewer'},
+    {'agent_transcript_path': '/child'}, {'transcript_path': '/child-transcript.jsonl'},
+])
+def test_rejected_hooks_preserve_main_lifecycle_and_allowance(inbox, event, change):
+    from peer_budget import lifecycle_observed
+    state, store, payload, add = inbox
+    assert peer_hooks.deliver({**payload, 'hook_event_name': 'Stop'}, state) == {}
+    seen = store.get('hook_seen')
+    store.put('remaining', 0)
+    store.put('wake_remaining', 0)
+    add()
+    assert peer_hooks.deliver({**payload, **change, 'hook_event_name': event,
+        'turn_id': 'child-turn', 'prompt': 'New owner task'}, state) == {}
+    assert store.get('hook_seen') == seen and lifecycle_observed(store)
+    assert store.get('phase') == 'idle'
+    assert store.get('remaining') == store.get('wake_remaining') == 0
+    assert store.pending()[0]['status'] == 'received'
+    rejected = store.get('hook_rejected')
+    assert rejected['turn'] == 'child-turn' and rejected['routing'].startswith('rejected: ')
+    assert peer_hooks.deliver(payload, state) == {}
+    assert store.get('hook_seen')['event'] == 'PostToolUse'
+    assert store.get('phase') == 'active' and lifecycle_observed(store)
+    assert store.get('hook_rejected') == rejected
+
+
+def test_rejected_hook_alone_does_not_prove_lifecycle(inbox):
+    from peer_budget import lifecycle_observed
+    state, store, payload, _ = inbox
+    assert peer_hooks.deliver({**payload, 'agent_id': 'child'}, state) == {}
+    assert store.get('hook_seen') is None and not lifecycle_observed(store)
+    assert store.get('hook_rejected')['routing'] == 'rejected: subagent marker'
+
+
+def test_startup_before_thread_persistence_remains_unverified(inbox, monkeypatch):
+    import peer_registry
+    state, store, payload, _ = inbox
+    config = store.get('config')
+    config.update(owner_pid=1, owner_identity='owner')
+    store.put('config', config)
+    monkeypatch.setattr(peer_registry, 'register', lambda *_: {'owner_pid': 1, 'owner_identity': 'owner'})
+    with sqlite3.connect(Path(config['codex_home']) / 'state_5.sqlite') as db:
+        db.execute('DELETE FROM threads')
+    assert peer_hooks.deliver({**payload, 'hook_event_name': 'SessionStart'}, state) == {}
+    assert store.get('phase') == 'idle' and store.get('hook_seen') is None
+    assert store.get('hook_rejected')['routing'] == 'rejected: missing thread'
