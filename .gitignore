@@ -1,0 +1,16 @@
+__pycache__/
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.venv/
+
+# Local operational evidence, never part of the public repository.
+docs/live-use-study-*.md
+docs/communication-coverage.md
+docs/observability-coverage.md
+private/
+*.sqlite*
+*.log
+.env
+.env.*

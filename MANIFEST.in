@@ -1,0 +1,7 @@
+include install.sh
+include package_share.py
+recursive-include sharing *.md
+include docs/VALIDATION.md
+exclude docs/live-use-study-*.md
+exclude docs/communication-coverage.md
+exclude docs/observability-coverage.md
