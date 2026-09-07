@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -15,6 +16,7 @@ import pytest
 
 from peer_chat import Store
 from peer_peers import all_peers
+from peer_platform import process_identity
 
 pytestmark = pytest.mark.skipif(not sys.platform.startswith("linux"), reason="real /proc writer-lock harness")
 
@@ -88,8 +90,33 @@ def mesh():
                 owner.command("register", "--name", name)
             yield root, owners
         finally:
+            # Detached watchdogs can recreate metadata during rmtree. Stop and
+            # wait for every fixture writer before removing its temporary root.
+            watch_path = state / "watch.json"
+            if watch_path.exists():
+                watch = json.loads(watch_path.read_text())
+                if process_identity(watch['pid']) == watch['identity']:
+                    os.kill(watch['pid'], signal.SIGTERM)
+                    deadline = time.monotonic() + 10
+                    while process_identity(watch['pid']) == watch['identity']:
+                        assert time.monotonic() < deadline, 'fixture watchdog did not stop'
+                        time.sleep(.05)
+            runtimes = []
             for owner in owners:
+                if (state / owner.thread / 'inbox.sqlite').exists():
+                    store = owner.store()
+                    try:
+                        runtime = store.get('runtime')
+                        if runtime:
+                            runtimes.append(runtime)
+                    finally:
+                        store.close()
                 owner.close()
+            deadline = time.monotonic() + 10
+            for runtime in runtimes:
+                while process_identity(runtime['pid']) == runtime['identity']:
+                    assert time.monotonic() < deadline, 'fixture listener did not stop'
+                    time.sleep(.05)
 
 
 def send(owner, root, body, *options):
