@@ -1,6 +1,6 @@
 include install.sh
-include package_share.py
-recursive-include sharing *.md
+include scripts/package_share.py
+include docs/QUICKSTART.md
 include docs/VALIDATION.md
 exclude docs/live-use-study-*.md
 exclude docs/communication-coverage.md

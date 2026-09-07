@@ -259,6 +259,25 @@ verification rather than a promise of universal support.
 
 ## Develop, share, remove
 
+Repository layout:
+
+```text
+src/                  Runtime modules; installed command entrypoints
+  peer_chat_assets/   Canonical skill instructions bundled with the package
+tests/                Unit tests and process/socket integration tests
+scripts/              Release and share-bundle tooling
+docs/                 Quick start and validation guide
+.github/workflows/    Automated tests
+install.sh            One-command installer
+pyproject.toml        Package metadata and test configuration
+```
+
+Runtime module names stay stable (`peer_chat`, `peer_hooks`, and the other
+`peer_*` modules). Install the checkout in editable mode before developing so
+commands and subprocesses resolve modules from `src/`, including from another
+working directory. Edit skill instructions only in
+`src/peer_chat_assets/SKILL.md`; setup installs that resource for both agents.
+
 ```sh
 uv venv
 uv pip install -e '.[test]'
@@ -267,7 +286,7 @@ uv build
 ```
 
 Build a colleague bundle from a tested wheel with
-`python3 package_share.py dist/local_peer_chat-0.5.4-py3-none-any.whl`.
+`python3 scripts/package_share.py dist/local_peer_chat-0.5.4-py3-none-any.whl`.
 It includes the wheel, installer, quick start, reference and checksums. Nothing
 is published to a package index. Ordinary tests use fixtures and never launch
 a model. Native configuration probes are separate and use temporary homes.

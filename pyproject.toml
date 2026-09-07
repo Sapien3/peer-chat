@@ -22,6 +22,7 @@ peer-chat-hook = "peer_hooks:main"
 peer-chat-setup = "peer_setup:main"
 
 [tool.setuptools]
+package-dir = {"" = "src"}
 py-modules = ["peer_chat", "peer_hooks", "peer_setup", "peer_platform", "peer_codex", "peer_registry", "peer_connect", "peer_budget", "peer_wake", "peer_peers", "peer_observe", "peer_delivery", "peer_watch"]
 packages = ["peer_chat_assets"]
 
@@ -29,5 +30,5 @@ packages = ["peer_chat_assets"]
 peer_chat_assets = ["SKILL.md"]
 
 [tool.pytest.ini_options]
-pythonpath = ["."]
+pythonpath = ["src"]
 testpaths = ["tests"]

@@ -13,7 +13,7 @@ import uuid
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parents[1] / "peer_chat.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "src" / "peer_chat.py"
 
 
 def eventually(check, seconds=8):

@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "peer_platform.py"
+MODULE_PATH = Path(__file__).resolve().parents[1] / "src" / "peer_platform.py"
 SPEC = importlib.util.spec_from_file_location("peer_platform", MODULE_PATH)
 assert SPEC and SPEC.loader
 pp = importlib.util.module_from_spec(SPEC)

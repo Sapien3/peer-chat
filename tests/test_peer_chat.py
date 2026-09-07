@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "peer_chat.py"
+MODULE_PATH = Path(__file__).resolve().parents[1] / "src" / "peer_chat.py"
 
 SPEC = importlib.util.spec_from_file_location("peer_chat", MODULE_PATH)
 assert SPEC and SPEC.loader, f"missing {MODULE_PATH}"

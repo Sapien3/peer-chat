@@ -11,7 +11,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('wheel', type=Path)
     args = parser.parse_args()
-    root = Path(__file__).resolve().parent
+    root = Path(__file__).resolve().parents[1]
     with zipfile.ZipFile(args.wheel) as wheel:
         metadata_paths = [n for n in wheel.namelist() if n.endswith('.dist-info/METADATA')]
         if len(metadata_paths) != 1:
@@ -23,7 +23,7 @@ def main():
     files = {
         args.wheel.name: args.wheel.read_bytes(),
         'install.sh': (root / 'install.sh').read_bytes(),
-        'README.md': (root / 'sharing/README.md').read_text().replace('peer-chat-0.5.4', f'peer-chat-{version}').encode(),
+        'README.md': (root / 'docs/QUICKSTART.md').read_text().replace('peer-chat-0.5.4', f'peer-chat-{version}').encode(),
         'REFERENCE.md': (root / 'README.md').read_bytes(),
         'docs/VALIDATION.md': (root / 'docs/VALIDATION.md').read_bytes(),
     }
