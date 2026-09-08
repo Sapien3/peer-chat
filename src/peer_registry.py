@@ -521,3 +521,106 @@ def select_session(rows, selector, kind: Optional[str] = None) -> dict:
 __all__ = ["register", "sessions", "prune", "select_session", "describe", "default_name", "sanitise_name",
            "discover_locked_threads", "default_codex_home",
            "registry_dir", "SessionList", "VERSION", "REGISTRATION_EVENTS", "IDLE_EVENTS", "ACTIVE_EVENTS", "PHASES"]
+
+
+def routing_rejection(payload, config, *, check_environment=True):
+    """Subagent hooks may name the parent session: pin the transcript too.
+
+    Only compare metadata paths. Never read a transcript or user/tool content.
+    Missing or changed metadata fails closed instead of delivering to a child.
+    """
+    if payload.get("session_id") != config["thread"]:
+        return "session_id mismatch"
+    if payload.get("agent_id") or payload.get("agent_type") or payload.get("agent_transcript_path") is not None:
+        return "subagent marker"
+    environment_thread = os.environ.get("CODEX_THREAD_ID")
+    if check_environment and environment_thread and environment_thread != config["thread"]:
+        return "CODEX_THREAD_ID mismatch"
+    transcript = payload.get("transcript_path")
+    if not isinstance(transcript, str) or not transcript:
+        return "missing transcript_path"
+    home = Path(config["codex_home"])
+    with sqlite3.connect(f"file:{home / 'state_5.sqlite'}?mode=ro", uri=True, timeout=.2) as db:
+        row = db.execute("SELECT rollout_path,archived FROM threads WHERE id=?", (config["thread"],)).fetchone()
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='thread_spawn_edges'").fetchone():
+            if db.execute("SELECT 1 FROM thread_spawn_edges WHERE child_thread_id=? LIMIT 1", (config["thread"],)).fetchone():
+                return "child thread"
+    if not row:
+        return "missing thread"
+    if row[1]:
+        return "archived thread"
+    if not row[0] or Path(transcript).resolve() != Path(row[0]).resolve():
+        return "transcript_path mismatch"
+    return None
+
+
+
+def remember_hook(payload, registration, state_root):
+    """Retain verified lifecycle before any peer/inbox exists; never creates a bridge.
+
+    Separate from presence so an explicit rename/register cannot erase evidence.
+    Only hook execution calls this writer. No prompt or transcript body is saved.
+    """
+    if payload.get('hook_event_name') not in REGISTRATION_EVENTS:
+        return
+    try:
+        if routing_rejection(payload, registration) is not None:
+            return
+    except (OSError, ValueError, KeyError, TypeError, sqlite3.Error):
+        return  # Presence without verifiable lifecycle remains discoverable.
+    record = {k: registration[k] for k in ('thread', 'codex_home', 'owner_pid', 'owner_identity')}
+    record.update(at=time.time(), event=payload['hook_event_name'], turn=payload.get('turn_id'),
+                  routing='matched', transcript_path=payload['transcript_path'])
+    path = _private_dir(registry_dir(state_root) / 'hooks') / (record['thread'] + '.json')
+    _atomic_write_json(path, record)
+
+
+def seed_lifecycle(store, state_root):
+    """Carry an actual earlier hook into a newly attached inbox for the same owner.
+
+    Recheck owner and native routing metadata. Writer-lock presence, old-owner
+    records and discovery phase alone can never establish readiness.
+    """
+    config = store.get('config') or {}
+    thread = config.get('thread')
+    if not valid_id(thread):
+        return False
+    path = registry_dir(state_root) / 'hooks' / (thread + '.json')
+    try:
+        if path.is_symlink() or path.parent.is_symlink() or path.stat().st_uid != os.getuid():
+            return False
+        record = json.loads(path.read_text())
+        if not isinstance(record, dict):
+            return False
+        if any(record.get(k) != config.get(k) for k in ('thread', 'owner_pid', 'owner_identity', 'codex_home')):
+            return False
+        if pp.process_identity(config['owner_pid']) != config['owner_identity']:
+            return False
+        from peer_budget import LIFECYCLE_EVENTS
+        import math
+        at = record.get('at')
+        if (record.get('routing') != 'matched' or record.get('event') not in LIFECYCLE_EVENTS
+                or type(at) not in (int, float) or not math.isfinite(at) or at > time.time()):
+            return False
+        # The connecting caller can be a different session. Saved hook evidence
+        # is already bound to its verified owner, not the caller's environment.
+        payload = {'session_id': thread, 'transcript_path': record.get('transcript_path')}
+        if routing_rejection(payload, config, check_environment=False) is not None:
+            return False
+    except (OSError, ValueError, TypeError, KeyError, sqlite3.Error):
+        return False
+    with store.db:
+        store.db.execute('BEGIN IMMEDIATE')
+        # A real hook can arrive while connect is checking the saved evidence.
+        seen = store.get('hook_seen') or {}
+        if isinstance(seen, dict) and seen.get('routing') == 'matched':
+            previous_at = seen.get('at')
+            if (seen.get('owner_identity') != config['owner_identity']
+                    or (type(previous_at) in (int, float) and previous_at >= at)):
+                return False
+        evidence = {k: record.get(k) for k in ('at', 'event', 'turn', 'routing', 'owner_identity')}
+        evidence['source'] = 'preconnection_hook'
+        phase = 'idle' if record['event'] in IDLE_EVENTS else 'active'
+        for key, value in (('hook_seen', evidence), ('phase', phase)):
+            store.db.execute('INSERT OR REPLACE INTO meta VALUES (?,?)', (key, json.dumps(value)))
+    return True

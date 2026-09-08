@@ -211,7 +211,7 @@ def _warning(row: dict) -> Optional[str]:
         hint = f"; the owner's next prompt renews it (limit {limit})" if isinstance(limit, int) and limit > 0 else "; configure `peer-chat delivery auto --budget N`"
         return "Delivery budget exhausted: messages stay in the inbox" + hint
     if ds == "awaiting_lifecycle_hook":
-        return ("No hook has run in this Codex process yet, so messages wait in the inbox: run peer-chat-setup once if never done, "
+        return ("Verified hook readiness is not available for this Codex process, so messages wait in the inbox: run peer-chat-setup once if never done, "
                 "resume the thread if the process predates setup, or type a first prompt in a new tab; the watchdog reconnects automatically")
     if ds == "paused_wake_budget":
         return "Wake budget exhausted: an idle Codex will not be woken until the owner's next prompt renews it"

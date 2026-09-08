@@ -51,6 +51,11 @@ an untouched Codex tab still cannot receive model context until its first turn:
 CLI 0.153.4 defers SessionStart and rejects remote queue initialization without
 a saved rollout. Report `awaiting_lifecycle_hook` as waiting, never as received.
 Do not infer idle or permissions from missing metadata or add synthetic hooks.
+A tab that already completed a turn retains its verified hook readiness before
+connection. Connect and send directly; do not request a second greeting or
+"continue" when the destination reports `idle_wake_enabled` or `active_hooks`.
+Prefer the sessions table and the owner's supplied session name over scanning
+conversation transcripts to find a recipient.
 
 For a Codex process opened before hook installation, quit the original process
 and resume its conversation to load hooks. A second simultaneous resume causes

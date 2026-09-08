@@ -43,7 +43,11 @@ writer locks, even before the first message. `peer-chat connect SESSION_NAME`
 uses that discovery automatically. No prompt, manual registration command, or
 repository-specific setup is needed to establish the connection. Discovery
 reads process and lock metadata; it does not launch a model or read transcripts.
-Hook registration takes over when the first turn starts.
+Hook registration takes over when the first turn starts. Verified lifecycle
+events are retained even before a bridge exists. Once a tab has completed its
+first turn, a later connection can use its recorded idle readiness immediately;
+a second greeting or "continue" prompt is not required. Evidence is bound to the
+same live process and transcript and never transfers to a restarted owner.
 
 Keep an untouched tab open while another agent connects. Codex can print a
 session ID before it has saved any conversation; after that empty tab exits,
@@ -288,7 +292,7 @@ uv build
 ```
 
 Build a colleague bundle from a tested wheel with
-`python3 scripts/package_share.py dist/local_peer_chat-0.5.5-py3-none-any.whl`.
+`python3 scripts/package_share.py dist/local_peer_chat-0.5.6-py3-none-any.whl`.
 It includes the wheel, installer, quick start, reference and checksums. Nothing
 is published to a package index. Ordinary tests use fixtures and never launch
 a model. Native configuration probes are separate and use temporary homes.

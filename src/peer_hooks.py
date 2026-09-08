@@ -11,40 +11,11 @@ import time
 
 from peer_chat import STATE_ROOT, Store, queued_text, valid_id
 from peer_peers import all_peers
+from peer_registry import routing_rejection, remember_hook
 
 EVENTS = {"SessionStart", "PostToolUse", "UserPromptSubmit", "Stop"}
 MAX_CONTEXT = 18000
 
-
-def routing_rejection(payload, config):
-    """Subagent hooks may name the parent session: pin the transcript too.
-
-    Only compare metadata paths. Never read a transcript or user/tool content.
-    Missing or changed metadata fails closed instead of delivering to a child.
-    """
-    if payload.get("session_id") != config["thread"]:
-        return "session_id mismatch"
-    if payload.get("agent_id") or payload.get("agent_type") or payload.get("agent_transcript_path") is not None:
-        return "subagent marker"
-    environment_thread = os.environ.get("CODEX_THREAD_ID")
-    if environment_thread and environment_thread != config["thread"]:
-        return "CODEX_THREAD_ID mismatch"
-    transcript = payload.get("transcript_path")
-    if not isinstance(transcript, str) or not transcript:
-        return "missing transcript_path"
-    home = Path(config["codex_home"])
-    with sqlite3.connect(f"file:{home / 'state_5.sqlite'}?mode=ro", uri=True, timeout=.2) as db:
-        row = db.execute("SELECT rollout_path,archived FROM threads WHERE id=?", (config["thread"],)).fetchone()
-        if db.execute("SELECT 1 FROM sqlite_master WHERE name='thread_spawn_edges'").fetchone():
-            if db.execute("SELECT 1 FROM thread_spawn_edges WHERE child_thread_id=? LIMIT 1", (config["thread"],)).fetchone():
-                return "child thread"
-    if not row:
-        return "missing thread"
-    if row[1]:
-        return "archived thread"
-    if not row[0] or Path(transcript).resolve() != Path(row[0]).resolve():
-        return "transcript_path mismatch"
-    return None
 
 
 def matches_thread(payload, config):
@@ -59,6 +30,8 @@ def deliver(payload, state_root=STATE_ROOT):
     from peer_registry import register
     home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
     registration = register(payload, home, state_root)
+    if registration:
+        remember_hook(payload, registration, state_root)
     path = Path(state_root) / thread / "inbox.sqlite"
     if not path.is_file():
         return {}  # Most sessions have no bridge; do not create one.

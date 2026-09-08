@@ -734,6 +734,8 @@ def start_bridge(args, store, state):
         store.put("remaining", budget)
         store.put("wake_remaining", budget)
         store.put("budget_limit", budget)
+    from peer_registry import seed_lifecycle
+    seed_lifecycle(store, args.state_root)
     if live and runtime.get("protocol_version", 1) >= 3:
         return {"status": "already_running", **runtime, "peer_key": requested["key"] if requested else config["default_peer"]}
     if live:
