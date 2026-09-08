@@ -411,9 +411,18 @@ def wake_idle(store, config):
         wakes = store.get("wake_remaining", store.get("remaining", 0))
         if store.get("phase") != "idle" or store.get("remaining", 0) <= 0 or wakes <= 0 or store.get("wake_pending"):
             return
-        row = next((r for r in store.db.execute("SELECT * FROM messages WHERE status='received' AND kind='message' ORDER BY created")
-                    if r["peer"] in all_peers(config)), None)
-        if not row or len(json.loads(row["hops"])) >= 8:
+        row = None
+        enrolled = all_peers(config)
+        for candidate in store.db.execute("SELECT peer,id,hops FROM messages WHERE status='received' AND kind='message' ORDER BY created").fetchall():
+            reason = ("Peer no longer enrolled" if candidate['peer'] not in enrolled else
+                      "Hop limit reached" if len(json.loads(candidate['hops'])) >= 8 else None)
+            if reason:
+                store.db.execute("UPDATE messages SET status='held',detail=? WHERE peer=? AND id=? AND kind='message' AND status='received'",
+                                 (reason, candidate['peer'], candidate['id']))
+                continue
+            row = candidate
+            break
+        if row is None:
             return
         marker = {"id": row["id"], "status": "writing", "at": time.time()}
         store.db.execute("INSERT OR REPLACE INTO meta VALUES ('wake_pending',?)", (json.dumps(marker),))

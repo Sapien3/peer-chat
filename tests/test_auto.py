@@ -120,3 +120,25 @@ def test_consent_pins_exact_definitions_and_preserves_unrelated_hooks(tmp_path):
     client.rows[0]["command"] = "/unreviewed/other-hook"
     with pytest.raises(ValueError, match="differs"):
         peer_setup.enable_reviewed(client, tmp_path, command, digest)
+
+
+@pytest.mark.parametrize('with_next', [False, True])
+def test_idle_hop_guard_marks_held_and_does_not_block_later_work(auto_store, monkeypatch, with_next):
+    store, config, mid = auto_store
+    store.put('phase', 'idle')
+    with store.db:
+        store.db.execute('UPDATE messages SET hops=? WHERE id=?', (json.dumps(['a' * 24] * 8), mid))
+    next_id = str(uuid.uuid4())
+    if with_next:
+        store.accept('peer', {'id': next_id, 'kind': 'message', 'body': 'Other authorized work', 'hops': []})
+    calls = []
+    monkeypatch.setattr(peer_chat.subprocess, 'run', lambda args, **kw: calls.append(args) or subprocess.CompletedProcess(args, 0, '', ''))
+    peer_chat.dispatch(store, config)
+    peer_chat.dispatch(store, config)
+    row = store.db.execute('SELECT status,detail FROM messages WHERE id=?', (mid,)).fetchone()
+    assert tuple(row) == ('held', 'Hop limit reached')
+    assert store.get('remaining') == 5
+    assert store.get('wake_remaining', 5) == (4 if with_next else 5)
+    assert len(calls) == int(with_next)
+    if with_next:
+        assert next_id in calls[0][-1] and mid not in calls[0][-1]

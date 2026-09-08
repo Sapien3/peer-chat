@@ -10,7 +10,7 @@ You need Codex and Claude Code installed and signed in, plus Python 3.10+ with
 venv support, uv, or pipx. Use both agents under the same operating-system user.
 
 1. Extract this ZIP.
-2. Open a terminal in the extracted `peer-chat-0.5.7` folder and run:
+2. Open a terminal in the extracted `peer-chat-0.5.8` folder and run:
 
    ```sh
    sh install.sh

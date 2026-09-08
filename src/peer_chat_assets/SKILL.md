@@ -114,7 +114,11 @@ peer-chat status
 ```
 
 A wake notice may be stale; if its exact message is already `consumed`, do not
-repeat work or send another reply. `hook_offered`, `queued`, and `written` are
+repeat work or send another reply. A `held` message is blocked by a routing guard;
+inspect `status RECIPIENT --message-id UUID` for `hold_reason`. `hop_limit` cannot
+be cleared by renewing delivery allowance. Do not automatically resend with a
+new ID or reset a reply chain to bypass the guard. Other eligible messages can
+continue independently. `hook_offered`, `queued`, and `written` are
 transport states. Only explicit `ack`/`read --ack` marks consumption. Preserve
 ambiguous messages for inspection; never blindly retry them.
 

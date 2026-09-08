@@ -326,6 +326,9 @@ def snapshot(state_root, thread) -> Optional[dict]:
         row["runtime_pid"] = runtime.get("pid") if isinstance(runtime.get("pid"), int) else None
     row["reachable"] = row["runtime_state"] == "running" and row["delivery_state"] in REACHABLE_STATES
     row["warning"] = _warning(row)
+    if row['pending_by_status'].get('held'):
+        held_note = f"{row['pending_by_status']['held']} message(s) held by a routing guard; inspect status --messages for the hold reason."
+        row['warning'] = (row['warning'] + ' ' if row['warning'] else '') + held_note
     if row['notice_failures']:
         note = f"{len(row['notice_failures'])} peer advisory attempt(s) unconfirmed; no automatic resend. Inspect notice_failures in status --json."
         # Two independent warnings must read as two sentences, not run together.
@@ -375,18 +378,20 @@ def message_status(state_root, thread, message_id=None):
     path = Path(state_root) / thread / 'inbox.sqlite'
     with closing(sqlite3.connect(f'file:{path}?mode=ro', uri=True, timeout=DB_TIMEOUT)) as db:
         where, params = (" AND id=?", (message_id,)) if message_id else ('', ())
-        records = db.execute("SELECT peer,id,status,created FROM messages WHERE kind='message'" + where
+        records = db.execute("SELECT peer,id,status,created,detail FROM messages WHERE kind='message'" + where
                              + " ORDER BY created DESC,peer LIMIT 21", params).fetchall()
         has_timing = db.execute("SELECT 1 FROM sqlite_master WHERE name='message_timing'").fetchone()
         wake_row = db.execute("SELECT value FROM meta WHERE key='last_wake'").fetchone()
         wake = json.loads(wake_row[0]) if wake_row else {}
         names = {p['key']: p.get('name') for p in observed['peers']}
         results = []
-        for peer, mid, status, created in records[:20]:
+        for peer, mid, status, created, detail in records[:20]:
             timing = dict(db.execute('SELECT stage,at FROM message_timing WHERE peer=? AND id=?', (peer, mid))) if has_timing else {}
             matched_wake = (isinstance(wake, dict) and wake.get('id') == mid
                             and db.execute("SELECT count(*) FROM messages WHERE kind='message' AND id=?", (mid,)).fetchone()[0] == 1)
             results.append({'peer': peer, 'peer_short': key_short(peer), 'peer_name': names.get(peer), 'id': mid, 'status': status,
+                'hold_reason': ({'Hop limit reached': 'hop_limit', 'Hop limit reached; available through read': 'hop_limit',
+                                 'Peer no longer enrolled': 'peer_not_enrolled', 'Message belongs to a previously enrolled peer': 'peer_not_enrolled'}.get(detail, 'held') if status == 'held' else None),
                 'acknowledged': status == 'consumed', 'created_at': created,
                 'age_s': max(0, int(time.time() - created)),
                 'hook_offered_at': timing.get('hook_offered'), 'acknowledged_at': timing.get('consumed'),

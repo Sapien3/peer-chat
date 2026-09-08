@@ -229,3 +229,37 @@ def test_rejected_hook_diagnostic_does_not_hide_accepted_lifecycle(tmp_path):
     assert row['hook_rejected']['routing'] == 'rejected: subagent marker'
     assert 'PRIVATE' not in json.dumps(row)
     assert path.read_bytes() == before
+
+
+def test_held_message_warns_once_even_when_bridge_is_ready(tmp_path, monkeypatch):
+    import peer_chat
+    import peer_delivery as delivery
+    store = Store(tmp_path / 'inbox.sqlite')
+    config = {'thread': T1, 'peers': {'p': {'kind': 'claude', 'key': 'p', 'identity': 'p', 'pid': 1, 'socket': '/unused'}}}
+    store.put('runtime', {'pid': os.getpid()})
+    store.accept('p', {'kind': 'message', 'id': 'held-id', 'body': 'SECRET'})
+    store.set_status('p', 'held-id', 'held', 'Hop limit reached')
+    monkeypatch.setattr(delivery, 'view', lambda *_: {'runtime_state': 'running', 'delivery_state': 'idle_wake_enabled', 'reachable': True, 'remaining': 12})
+    calls = []
+    monkeypatch.setattr(peer_chat, 'outbound', lambda *args, **kwargs: calls.append(args))
+    try:
+        delivery.notify(store, config, tmp_path)
+        delivery.notify(store, config, tmp_path)
+        assert len(calls) == 1 and 'held-id' in calls[0][1] and '"state": "held"' in calls[0][1]
+        assert 'SECRET' not in calls[0][1]
+        assert store.get('notice_message:p:held-id')['state'] == 'held'
+    finally:
+        store.close()
+
+
+def test_held_reason_is_visible_without_exposing_arbitrary_detail(tmp_path):
+    from peer_observe import message_status
+    path = make_bridge(tmp_path, T1, messages=('held', 'held'))
+    with sqlite3.connect(path) as db:
+        db.execute("UPDATE messages SET detail='Hop limit reached' WHERE id='m-0'")
+        db.execute("UPDATE messages SET detail='SECRET' WHERE id='m-1'")
+    before = path.read_bytes()
+    rows = message_status(tmp_path, T1)['messages']
+    assert {r['hold_reason'] for r in rows} == {'hop_limit', 'held'}
+    assert 'held by a routing guard' in snapshot(tmp_path, T1)['warning']
+    assert 'SECRET' not in json.dumps(rows) and path.read_bytes() == before

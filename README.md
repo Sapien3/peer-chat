@@ -216,6 +216,10 @@ they cannot overwrite the main session's last accepted `hook_seen` event.
 Startup-hook warnings wait 20 seconds and disappear if delivery catches up first;
 budget exhaustion and offline-state warnings remain immediate.
 Codex advisories are metadata, surfaced at the next active hook without a wake.
+Messages blocked by the eight-hop guard are marked `held`, with `hold_reason`
+in `status --messages`. They do not spend delivery/wake allowance or block later
+eligible messages. A held-message advisory is attempted once for its sender.
+Renewing an allowance cannot release a held message; inspect it explicitly.
 
 A single local watchdog starts with the first connection. It repairs crashed
 listeners, preserves inboxes and allowances, and reconnects the same verified
@@ -306,7 +310,7 @@ uv build
 ```
 
 Build a colleague bundle from a tested wheel with
-`python3 scripts/package_share.py dist/local_peer_chat-0.5.7-py3-none-any.whl`.
+`python3 scripts/package_share.py dist/local_peer_chat-0.5.8-py3-none-any.whl`.
 It includes the wheel, installer, quick start, reference and checksums. Nothing
 is published to a package index. Ordinary tests use fixtures and never launch
 a model. Native configuration probes are separate and use temporary homes.

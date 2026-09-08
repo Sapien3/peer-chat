@@ -78,27 +78,34 @@ def notify(store, config, state_root):
     now = time.time()
     for key, peer in all_peers(config).items():
         prior = store.get('notice:' + key)
-        pending_rows = store.db.execute("SELECT id,created FROM messages WHERE peer=? AND kind='message' AND status='received' ORDER BY created LIMIT 1000", (key,)).fetchall()
-        if not pending_rows or current.get('reachable'):
+        pending_rows = store.db.execute("SELECT id,created,status FROM messages WHERE peer=? AND kind='message' AND status IN ('received','held') ORDER BY created LIMIT 1000", (key,)).fetchall()
+        pending_rows = [r for r in pending_rows if r[2] == 'held' or not current.get('reachable')]
+        if not pending_rows:
             continue
         unwarned = [r for r in pending_rows if not store.get('notice_message:' + key + ':' + r[0])]
         # Startup hooks can race the first message. Defer only that temporary
         # state; budget exhaustion and offline peers still warn immediately.
         startup = current.get('delivery_state') == 'awaiting_lifecycle_hook'
-        eligible = [r for r in unwarned if not startup or now - r[1] >= STARTUP_NOTICE_GRACE]
+        eligible = [r for r in unwarned if r[2] == 'held' or not startup or now - r[1] >= STARTUP_NOTICE_GRACE]
         unseen = [r[0] for r in eligible][:20]
         if not unseen:
             continue
+        held = [r[0] for r in eligible[:20] if r[2] == 'held']
+        notice_state = 'held' if len(held) == len(unseen) else current.get('delivery_state')
         record = {'signature': signature, 'at': now, 'result': 'attempting'}
         store.put('notice:' + key, record)  # Before write: don't blindly retry an ambiguous notice.
         for mid in unseen:
             store.put('notice_message:' + key + ':' + mid, {
-                'at': now, 'attempted': True, 'state': current.get('delivery_state'),
+                'at': now, 'attempted': True, 'state': 'held' if mid in held else current.get('delivery_state'),
                 'remaining': current.get('remaining')})
-        data = {'state': current.get('delivery_state'), 'remaining': current.get('remaining'),
+        data = {'state': notice_state, 'remaining': current.get('remaining'),
                 'message_id': unseen[0],
                 'message_ids': unseen,
                 'warning': current.get('warning') or 'Message retained; model delivery is currently blocked. Inspect peer-chat status.'}
+        if held:
+            data['held_message_ids'] = held
+            data['warning'] = ('Messages held by the hop/enrollment guard require explicit review; renewing an allowance cannot release them. '
+                'Inspect recipient status --message-id ID. Do not automatically resend or reset the reply chain.')
         if recovery and (not prior or recovery.get('id') not in prior.get('signature', [])):
             data['warning'] = 'Listener recovered after an unexpected exit. ' + data['warning']
         try:
