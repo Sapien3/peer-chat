@@ -68,3 +68,38 @@ def delivery_state(store):
     if mode == "auto" and phase == "idle" and store.get("wake_remaining", store.get("remaining", 0)) <= 0:
         return "paused_wake_budget"
     return "active_hooks" if phase == "active" else "idle_live_only" if mode == "live" else "idle_wake_enabled"
+
+
+def configure_delivery(store, thread, mode, budget, state_root):
+    """Change one incoming window atomically and identify still-blocked recipients."""
+    with store.db:
+        store.db.execute('BEGIN IMMEDIATE')
+        values = [('delivery', mode)]
+        if budget is not None:
+            limit = max(0, min(budget, 50))
+            values += [(key, limit) for key in ('remaining', 'wake_remaining', 'budget_limit')]
+        for key, value in values:
+            store.db.execute('INSERT OR REPLACE INTO meta VALUES (?,?)', (key, json.dumps(value)))
+        result = {'thread': thread, 'scope': 'incoming_only', 'delivery': mode,
+                  'budget': store.get('remaining'), 'wake_budget': store.get('wake_remaining'),
+                  'budget_limit': store.get('budget_limit'), 'delivery_state': delivery_state(store)}
+        config = store.get('config') or {}
+    from peer_peers import all_peers
+    from peer_observe import snapshot
+    current = snapshot(state_root, thread)
+    if current:
+        result.update({k: current[k] for k in ('name', 'runtime_state', 'delivery_state')})
+    blocked = []
+    for peer in all_peers(config).values():
+        if peer.get('kind') != 'codex':
+            continue
+        row = snapshot(peer.get('state_root', state_root), peer['thread'])
+        if row and row['delivery_state'] in ('paused_budget', 'paused_wake_budget'):
+            blocked.append({k: row[k] for k in ('thread', 'name', 'delivery_state', 'remaining', 'pending_count')})
+    result['blocked_recipients'] = blocked
+    result['note'] = "Changed only this thread's incoming window. Other sessions have separate receiving allowances."
+    if blocked:
+        result['warning'] = ('Connected recipients still have exhausted allowances. '
+            'With owner authorization, target the intended recipient using delivery MODE --budget N --to NAME; '
+            "then check that recipient's status. Waiting on this inbox does not renew another session.")
+    return result

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "local-peer-chat"
-version = "0.5.6"
+version = "0.5.7"
 description = "Durable messaging between existing local Codex and Claude Code sessions"
 requires-python = ">=3.10"
 dependencies = ["psutil>=5.9,<8; sys_platform == 'darwin'"]

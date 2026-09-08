@@ -1284,13 +1284,13 @@ def test_delivery_cli_preserves_budget_unless_given(tmp_path):
     root = tmp_path / "state-root"
     r = run_cli(root, thread, "delivery", "queue", "--budget", "5")
     assert r.returncode == 0, r.stderr
-    assert json.loads(r.stdout) == {"delivery": "queue", "budget": 5}
+    assert {k: json.loads(r.stdout)[k] for k in ("delivery", "budget")} == {"delivery": "queue", "budget": 5}
     r = run_cli(root, thread, "delivery", "inbox")
-    assert json.loads(r.stdout) == {"delivery": "inbox", "budget": 5}
+    assert {k: json.loads(r.stdout)[k] for k in ("delivery", "budget")} == {"delivery": "inbox", "budget": 5}
     r = run_cli(root, thread, "delivery", "queue")
-    assert json.loads(r.stdout) == {"delivery": "queue", "budget": 5}
+    assert {k: json.loads(r.stdout)[k] for k in ("delivery", "budget")} == {"delivery": "queue", "budget": 5}
     r = run_cli(root, thread, "delivery", "queue", "--budget", "0")
-    assert json.loads(r.stdout) == {"delivery": "queue", "budget": 0}
+    assert {k: json.loads(r.stdout)[k] for k in ("delivery", "budget")} == {"delivery": "queue", "budget": 0}
     r = run_cli(root, thread, "delivery", "queue", "--budget", "500")
     assert json.loads(r.stdout)["budget"] == 50, "budget is capped"
     for d in (root, root / thread):

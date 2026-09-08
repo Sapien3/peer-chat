@@ -849,6 +849,7 @@ def cli():
     p.add_argument("--to", dest="target")
     p = sub.add_parser("delivery")
     p.add_argument("mode", choices=("inbox", "live", "auto", "queue"))
+    p.add_argument("--to", dest="delivery_target", help="Change this named Codex recipient's incoming window; otherwise change the current thread")
     p.add_argument("--budget", type=int)
     args = parser.parse_args()
     if args.command == 'status' and args.status_thread:
@@ -909,6 +910,14 @@ def cli():
             return
         print(json.dumps(rows, ensure_ascii=False) if args.json else render_status(rows, show_orphans=args.all or bool(args.target)))
         return
+    if args.command == 'delivery' and args.delivery_target:
+        if any(arg == '--thread' or arg.startswith('--thread=') for arg in sys.argv[1:]):
+            parser.error('Choose --to NAME or --thread UUID, not both')
+        from peer_observe import snapshots
+        from peer_registry import select_session
+        selected = select_session([{**r, 'id': r['thread'], 'kind': 'codex'}
+            for r in snapshots(args.state_root) if r['runtime_state'] != 'unconfigured'], args.delivery_target)
+        args.thread = selected['thread']
     if not args.thread or not valid_id(args.thread):
         parser.error("An exact existing Codex thread UUID is required")
     if args.command == "register":
@@ -1050,12 +1059,8 @@ def cli():
         else:
             print(json.dumps(store.read(args.ack), ensure_ascii=False))
     elif args.command == "delivery":
-        if args.budget is not None:
-            store.put("remaining", max(0, min(args.budget, 50)))
-            store.put("wake_remaining", max(0, min(args.budget, 50)))
-            store.put("budget_limit", max(0, min(args.budget, 50)))
-        store.put("delivery", args.mode)
-        print(json.dumps({"delivery": args.mode, "budget": store.get("remaining")}))
+        from peer_budget import configure_delivery
+        print(json.dumps(configure_delivery(store, args.thread, args.mode, args.budget, args.state_root), ensure_ascii=False))
     elif args.command == "wait":
         until = time.monotonic() + min(60, max(0, args.timeout))
         while not store.pending() and time.monotonic() < until:
