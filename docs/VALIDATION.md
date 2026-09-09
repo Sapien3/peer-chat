@@ -34,4 +34,7 @@ its first turn; a process opened before setup needs a quit/resume to load hooks.
 
 Socket writes, hook offers, explicit acknowledgements and completed tasks are
 different events. Status reports them separately and leaves missing evidence
-unknown. Message/wake allowance exhaustion intentionally pauses delivery.
+unknown. Continuous delivery is the default for new connections; optional finite
+message/wake windows pause when exhausted. Burst tests exercise more than 1,000
+real socket arrivals, deduplication and receipts after acknowledged history,
+plus more than 50 hook deliveries and idle wake cycles without owner renewal.

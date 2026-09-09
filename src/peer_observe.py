@@ -290,7 +290,7 @@ def snapshot(state_root, thread) -> Optional[dict]:
     row["outgoing_uncertain"] = uncertain
     for key in ("remaining", "wake_remaining", "budget_limit"):
         value = meta.get(key)
-        row[key] = value if isinstance(value, int) and not isinstance(value, bool) else None
+        row[key] = value if value == "unlimited" or type(value) is int else None
     if row["wake_remaining"] is not None:
         row["wake_remaining_effective"], row["wake_remaining_source"] = row["wake_remaining"], "explicit"
     elif row["remaining"] is not None:
@@ -422,7 +422,7 @@ def sanitize(value, width: int = 0, keep_tail: int = 0) -> str:
 def _budget_cell(row: dict) -> str:
     rem, lim = row.get("remaining"), row.get("budget_limit")
     wake, source = row.get("wake_remaining_effective"), row.get("wake_remaining_source")
-    base = "-" if rem is None else (f"{rem}/{lim}" if isinstance(lim, int) else str(rem))
+    base = "-" if rem is None else (f"{rem}/{lim}" if isinstance(lim, int) and rem != "unlimited" else str(rem))
     if wake is None or (wake == rem and source != "legacy_fallback"):
         return base
     return f"{base} w{wake}" + ("~" if source == "legacy_fallback" else "")

@@ -155,7 +155,7 @@ def test_codex_notice_is_metadata_only_and_does_not_spend_or_wake(mesh):
     s = a.store()
     try:
         assert not s.pending()
-        assert s.get('remaining') == 12
+        assert s.get('remaining') == 'unlimited'
         assert s.get('wake_pending') is None
         from peer_delivery import take_notices
         assert 'PEER CHAT DELIVERY NOTICE' in take_notices(s)

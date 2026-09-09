@@ -1,7 +1,37 @@
-"""Bounded delivery windows renewed by owner interaction, never peer wake notices."""
+"""Continuous delivery by default, with optional owner-configured windows."""
 from __future__ import annotations
 
 import json
+
+UNLIMITED = "unlimited"
+
+
+def parse_budget(value):
+    if value == UNLIMITED:
+        return UNLIMITED
+    try:
+        return max(0, min(int(value), 50))
+    except (ValueError, TypeError):
+        raise ValueError("budget must be an integer or 'unlimited'") from None
+
+
+def available(value):
+    return value == UNLIMITED or (type(value) is int and value > 0)
+
+
+def spend(value):
+    return UNLIMITED if value == UNLIMITED else max(0, value - 1)
+
+
+def require_compatible_listener(store, thread, budget):
+    """Do not write new counter values while an older dispatcher can read them."""
+    if budget != UNLIMITED:
+        return
+    from peer_platform import process_identity
+    runtime = store.get('runtime') or {}
+    if (runtime.get('pid') and runtime.get('protocol_version', 1) < 4
+            and process_identity(runtime['pid']) == runtime.get('identity')):
+        raise ValueError(f"Listener predates unlimited delivery; run peer-chat --thread {thread} restart, then repeat the budget change")
 
 # Both automatic queue formats used by this package. They reach Codex's user
 # input hook as external data, so UserPromptSubmit alone is not owner evidence.
@@ -56,7 +86,7 @@ def delivery_state(store):
     mode = store.get("delivery", "inbox")
     if mode == "inbox":
         return "manual_inbox"
-    if store.get("remaining", 0) <= 0:
+    if not available(store.get("remaining", 0)):
         return "paused_budget"
     if mode == "queue":
         return "after_turn_queue"
@@ -65,18 +95,19 @@ def delivery_state(store):
     phase = store.get("phase", "unknown")
     if phase == "unknown":
         return "awaiting_lifecycle_hook"
-    if mode == "auto" and phase == "idle" and store.get("wake_remaining", store.get("remaining", 0)) <= 0:
+    if mode == "auto" and phase == "idle" and not available(store.get("wake_remaining", store.get("remaining", 0))):
         return "paused_wake_budget"
     return "active_hooks" if phase == "active" else "idle_live_only" if mode == "live" else "idle_wake_enabled"
 
 
 def configure_delivery(store, thread, mode, budget, state_root):
     """Change one incoming window atomically and identify still-blocked recipients."""
+    require_compatible_listener(store, thread, budget)
     with store.db:
         store.db.execute('BEGIN IMMEDIATE')
         values = [('delivery', mode)]
         if budget is not None:
-            limit = max(0, min(budget, 50))
+            limit = parse_budget(budget)
             values += [(key, limit) for key in ('remaining', 'wake_remaining', 'budget_limit')]
         for key, value in values:
             store.db.execute('INSERT OR REPLACE INTO meta VALUES (?,?)', (key, json.dumps(value)))

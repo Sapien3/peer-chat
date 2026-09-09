@@ -142,3 +142,21 @@ def test_idle_hop_guard_marks_held_and_does_not_block_later_work(auto_store, mon
     assert len(calls) == int(with_next)
     if with_next:
         assert next_id in calls[0][-1] and mid not in calls[0][-1]
+
+
+def test_unlimited_wakes_survive_more_than_fifty_idle_cycles(auto_store, monkeypatch):
+    store, config, _ = auto_store
+    for key in ('remaining', 'wake_remaining', 'budget_limit'):
+        store.put(key, 'unlimited')
+    store.put('phase', 'idle')
+    calls = []
+    monkeypatch.setattr(peer_chat.subprocess, 'run', lambda args, **kw:
+        calls.append(args) or subprocess.CompletedProcess(args, 0, '', ''))
+    for i in range(60):
+        if i:
+            store.accept('peer', {'id': str(uuid.uuid4()), 'kind': 'message', 'body': 'Next task', 'hops': []})
+        peer_chat.dispatch(store, config)
+        peer_chat.dispatch(store, config)
+        assert len(calls) == i + 1
+        store.read(True)
+    assert store.get('remaining') == store.get('wake_remaining') == 'unlimited'

@@ -1,4 +1,5 @@
 """Black-box lifecycle and stream tests; no model/vendor calls."""
+import concurrent.futures
 import json
 import os
 from pathlib import Path
@@ -269,3 +270,53 @@ def test_resume_keeps_hook_evidence_already_written_by_new_owner(bridge):
         assert status['hook_seen']['turn'] == 'new-owner-turn'
     finally:
         cli('stop');child.terminate();child.wait(timeout=5)
+
+
+def test_stream_burst_past_old_lifetime_cap_retains_all_messages_and_receipts(bridge):
+    cli, start, runtime, wire, connect, root = bridge
+    ids = [str(uuid.uuid4()) for _ in range(1200)]
+    started = time.monotonic()
+    def burst(batch):
+        with connect() as client:
+            client.sendall(b''.join(wire('burst', mid=mid) for mid in batch))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(burst, [ids[i:i + 150] for i in range(0, len(ids), 150)]))
+    eventually(lambda: len(cli('read')) == len(ids), seconds=15)
+    rows = cli('read', '--ack')
+    assert {r['id'] for r in rows} == set(ids)
+    with connect() as client:
+        client.sendall(wire('duplicate', mid=ids[0]) + wire('after acknowledged history'))
+        address = json.loads(wire())['from']
+        client.sendall((json.dumps({'type': 'control', 'action': 'peer_message_status', 'orig_msg_id': ids[0], 'status': 'delivered', 'from': address}) + '\n').encode())
+    eventually(lambda: len(cli('read')) == 1201)
+    state = next((root / 'state').glob('*/inbox.sqlite'))
+    def receipt_received():
+        with sqlite3.connect(state) as db:
+            return db.execute("SELECT count(*) FROM messages WHERE kind='receipt'").fetchone()[0] == 1
+    eventually(receipt_received)
+    assert cli('status')['rejected'] == 0
+    print(f'1200 durable socket arrivals plus follow-ups in {time.monotonic() - started:.3f}s')
+
+
+def test_unlimited_default_and_explicit_window_survive_restart(bridge):
+    cli, start, runtime, wire, connect, root = bridge
+    assert cli('status')['remaining'] == 'unlimited'
+    cli('restart')
+    assert cli('status')['remaining'] == 'unlimited'
+    cli('delivery', 'auto', '--budget', '3')
+    cli('restart')
+    assert cli('status')['remaining'] == 3
+
+
+def test_connect_upgrades_old_listener_preserving_finite_budget(bridge):
+    cli, start, runtime, wire, connect, root = bridge
+    cli('delivery', 'auto', '--budget', '7')
+    database = next((root / 'state').glob('*/inbox.sqlite'))
+    with sqlite3.connect(database) as db:
+        saved = json.loads(db.execute("SELECT value FROM meta WHERE key='runtime'").fetchone()[0])
+        saved['protocol_version'] = 3
+        db.execute("UPDATE meta SET value=? WHERE key='runtime'", (json.dumps(saved),))
+    replacement = start()
+    assert replacement['pid'] != runtime['pid'] and replacement['protocol_version'] == 4
+    assert cli('status')['remaining'] == 7
+    assert cli('delivery', 'auto', '--budget', 'unlimited')['budget'] == 'unlimited'

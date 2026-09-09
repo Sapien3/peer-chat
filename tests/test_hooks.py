@@ -205,3 +205,20 @@ def test_startup_before_thread_persistence_remains_unverified(inbox, monkeypatch
     assert peer_hooks.deliver({**payload, 'hook_event_name': 'SessionStart'}, state) == {}
     assert store.get('phase') == 'idle' and store.get('hook_seen') is None
     assert store.get('hook_rejected')['routing'] == 'rejected: missing thread'
+
+
+def test_unlimited_delivers_many_batches_once_without_owner_renewal(inbox):
+    state, store, payload, add = inbox
+    for key in ('remaining', 'wake_remaining', 'budget_limit'):
+        store.put(key, 'unlimited')
+    ids = {add() for _ in range(120)}
+    offered = []
+    for _ in range(30):
+        context = peer_hooks.deliver(payload, state)['hookSpecificOutput']['additionalContext']
+        batch = [mid for mid in ids if mid in context]
+        assert len(batch) == 4 and len(context) <= peer_hooks.MAX_CONTEXT
+        offered.extend(batch)
+    assert len(offered) == len(set(offered)) == 120
+    assert peer_hooks.deliver(payload, state) == {}
+    assert store.get('remaining') == store.get('wake_remaining') == 'unlimited'
+    assert all(r['status'] == 'hook_offered' for r in store.read())

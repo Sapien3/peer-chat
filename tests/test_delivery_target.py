@@ -91,3 +91,33 @@ def test_ambiguous_name_changes_neither_window(pair):
     result = run(root, 'delivery', 'auto', '--budget', '12', '--to', 'receiver')
     assert result.returncode != 0 and 'ambiguous' in result.stderr
     assert remaining(a) == remaining(b) == 0
+
+
+def test_unlimited_target_is_visible_and_can_return_to_bounded(pair):
+    root, a, b = pair
+    before = a.read_bytes()
+    with sqlite3.connect(b) as db:
+        runtime = json.loads(db.execute("SELECT value FROM meta WHERE key='runtime'").fetchone()[0])
+        runtime['protocol_version'] = 4
+        db.execute("UPDATE meta SET value=? WHERE key='runtime'", (json.dumps(runtime),))
+    result = run(root, 'delivery', 'auto', '--budget', 'unlimited', '--to', 'receiver')
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    assert data['budget'] == data['wake_budget'] == data['budget_limit'] == 'unlimited'
+    assert data['delivery_state'] == 'active_hooks' and a.read_bytes() == before
+    status = json.loads(run(root, 'status', 'receiver', '--json').stdout)[0]
+    assert status['remaining'] == status['wake_remaining_effective'] == 'unlimited'
+    assert status['warning'] is None
+    result = run(root, 'delivery', 'auto', '--budget', '0', '--to', 'receiver')
+    assert json.loads(result.stdout)['delivery_state'] == 'paused_budget'
+    assert remaining(b) == 0 and a.read_bytes() == before
+
+
+def test_old_listener_rejects_unlimited_before_any_mutation(pair):
+    root, a, b = pair
+    from peer_chat import Store
+    Store(b).close()  # Match a live listener's already-initialized schema.
+    before = a.read_bytes(), b.read_bytes()
+    result = run(root, 'delivery', 'auto', '--budget', 'unlimited', '--to', 'receiver')
+    assert result.returncode != 0 and 'restart' in result.stderr
+    assert (a.read_bytes(), b.read_bytes()) == before

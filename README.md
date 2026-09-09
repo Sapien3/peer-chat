@@ -130,15 +130,15 @@ peer-chat read --id MESSAGE_UUID
 peer-chat ack MESSAGE_UUID
 peer-chat send --reply-to MESSAGE_UUID --file PATH
 peer-chat wait --timeout 30
-peer-chat delivery auto --budget 12
+peer-chat delivery auto --budget unlimited
 ```
 
 Delivery windows belong to each receiving session. `peer-chat delivery auto
---budget 12` changes the current thread's incoming window only. To change a
+--budget unlimited` changes the current thread's incoming window only. To change a
 specific Codex recipient's window under owner authorization, use:
 
 ```sh
-peer-chat delivery auto --budget 12 --to SESSION_NAME
+peer-chat delivery auto --budget unlimited --to SESSION_NAME
 peer-chat status SESSION_NAME
 ```
 
@@ -147,13 +147,20 @@ state, and warns about connected Codex recipients whose allowances remain
 exhausted. `wait` watches the caller's inbox; it does not renew a recipient.
 Neither renewal acknowledges messages nor resumes an explicitly stopped bridge.
 
-Automatic delivery windows default to 12 messages and 12 wake notices (maximum
-50). A fresh owner message renews the configured window once; automated peer
-notices cannot renew their own allowance. Restarts preserve the configured size
-and both remaining counters. Explicit budget changes reset both counters;
-explicit zero stays disabled. Legacy channels without a declared window keep
-their old allowance until configured. Status distinguishes `paused_budget`,
-`paused_wake_budget`, and `awaiting_lifecycle_hook`.
+New connections deliver continuously: `--budget unlimited` removes both message
+and wake quotas. Existing connections preserve their settings on upgrade; use the
+targeted command above to switch one to continuous delivery. If its listener
+predates this release, restart that transport first with
+`peer-chat --thread THREAD_UUID restart`; the command checks this before changing
+settings. Reconnecting also upgrades the listener. An optional numeric
+`--budget N` selects a window of 0–50 messages and wakes. Only a fresh owner
+prompt renews that finite window; automated peer notices cannot renew it.
+Restarts preserve unlimited mode or the configured window and remaining counters.
+Explicit zero stays disabled. Status displays `unlimited` or reports
+`paused_budget` / `paused_wake_budget` for exhausted finite windows.
+`awaiting_lifecycle_hook` still requires verified hooks, regardless of budget.
+Inbox history has no lifetime message-count cutoff; retained messages and
+receipts continue accumulating on disk for inspection and deduplication.
 Hooks cap each delivery at four messages and 18,000 characters. Oversized
 messages get an exact-id read reference. `hook_offered`, `queued`, and `written`
 are transport states; only explicit acknowledgement marks `consumed`.
@@ -310,7 +317,7 @@ uv build
 ```
 
 Build a colleague bundle from a tested wheel with
-`python3 scripts/package_share.py dist/local_peer_chat-0.5.8-py3-none-any.whl`.
+`python3 scripts/package_share.py dist/local_peer_chat-0.6.0-py3-none-any.whl`.
 It includes the wheel, installer, quick start, reference and checksums. Nothing
 is published to a package index. Ordinary tests use fixtures and never launch
 a model. Native configuration probes are separate and use temporary homes.

@@ -218,7 +218,7 @@ def test_hooks_offer_messages_from_both_codex_peers(mesh, monkeypatch):
     assert first in text and second in text
     assert "Invited peer: B" in text and "Invited peer: C" in text
     assert peer_hooks.deliver(payload, a.state) == {}
-    assert a.command("status")["remaining"] == 10
+    assert a.command("status")["remaining"] == "unlimited"
     assert a.command("ack", first)["acknowledged"] == 1
     assert a.command("ack", second)["acknowledged"] == 1
 

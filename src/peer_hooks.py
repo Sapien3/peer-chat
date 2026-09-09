@@ -12,6 +12,7 @@ import time
 from peer_chat import STATE_ROOT, Store, queued_text, valid_id
 from peer_peers import all_peers
 from peer_registry import routing_rejection, remember_hook
+from peer_budget import available, spend
 
 EVENTS = {"SessionStart", "PostToolUse", "UserPromptSubmit", "Stop"}
 MAX_CONTEXT = 18000
@@ -81,7 +82,7 @@ def deliver(payload, state_root=STATE_ROOT):
             remaining = store.get("remaining", 0)
             rows = store.db.execute("SELECT * FROM messages WHERE kind='message' AND status='received' ORDER BY created LIMIT 4").fetchall()
             for row in rows:
-                if remaining <= 0:
+                if not available(remaining):
                     break
                 if row["peer"] not in all_peers(config) or len(json.loads(row["hops"])) >= 8:
                     reason = "Peer no longer enrolled" if row["peer"] not in all_peers(config) else "Hop limit reached"
@@ -97,7 +98,7 @@ def deliver(payload, state_root=STATE_ROOT):
                     break
                 pieces.append(text)
                 store.db.execute("UPDATE messages SET status='hook_offered',detail='Returned by hook; model acknowledgement pending' WHERE peer=? AND id=? AND kind='message'", (row["peer"], row["id"]))
-                remaining -= 1
+                remaining = spend(remaining)
             store.db.execute("UPDATE meta SET value=? WHERE key='remaining'", (json.dumps(remaining),))
         if not pieces:
             return {}

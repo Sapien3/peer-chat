@@ -42,7 +42,7 @@ def test_greeting_before_connect_retains_verified_idle_and_delivers(mesh):
     try:
         assert store.get('hook_seen')['at'] == before['at']
         assert store.get('hook_seen')['source'] == 'preconnection_hook'
-        assert store.get('remaining') == store.get('wake_remaining') == 12
+        assert store.get('remaining') == store.get('wake_remaining') == 'unlimited'
     finally:
         store.close()
     # Active boundaries deliver using the existing hook path, no owner prompt.

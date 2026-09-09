@@ -124,3 +124,16 @@ def test_precedence_inbox_budget_queue_before_lifecycle(exhausted):
     assert delivery_state(exhausted) == "awaiting_lifecycle_hook", "evidence without a known phase is still not ready"
     exhausted.put("phase", "idle"); exhausted.put("wake_remaining", 0)
     assert delivery_state(exhausted) == "paused_wake_budget"
+
+
+@pytest.mark.parametrize('phase,expected', [('active', 'active_hooks'), ('idle', 'idle_wake_enabled')])
+def test_unlimited_does_not_need_owner_renewal(exhausted, phase, expected):
+    for key in ('remaining', 'wake_remaining', 'budget_limit'):
+        exhausted.put(key, 'unlimited')
+    exhausted.put('phase', phase)
+    assert delivery_state(exhausted) == expected
+    assert renew_for_owner_prompt(exhausted, prompt()) is False
+    assert exhausted.get('remaining') == exhausted.get('wake_remaining') == 'unlimited'
+    exhausted.db.execute("DELETE FROM meta WHERE key='hook_seen'")
+    exhausted.db.commit()
+    assert delivery_state(exhausted) == 'awaiting_lifecycle_hook'

@@ -27,6 +27,7 @@ import uuid
 
 import peer_platform as pp
 from peer_peers import all_peers, enroll, resolve_peer, select_peer
+from peer_budget import UNLIMITED, available, parse_budget, spend
 
 MAX_LINE = 65536
 MAX_CLIENTS = 16
@@ -107,7 +108,7 @@ def decode_frame(raw, expected_from):
         if frame.get("type") == "control" and frame.get("action") == "peer_chat_notice":
             if (isinstance(frame.get("state"), str) and len(frame["state"]) <= 80
                     and isinstance(frame.get("warning"), str) and len(frame["warning"]) <= 1000
-                    and (frame.get("remaining") is None or type(frame["remaining"]) is int)):
+                    and (frame.get("remaining") is None or frame["remaining"] == UNLIMITED or type(frame["remaining"]) is int)):
                 return dict(kind="notice", state=frame["state"], warning=frame["warning"], remaining=frame.get("remaining"))
             return None
         if frame.get("type") == "control" and frame.get("action") == "peer_message_status":
@@ -365,7 +366,7 @@ def dispatch(store, config):
     if store.get("delivery") == "auto":
         wake_idle(store, config)
         return
-    if store.get("delivery", "inbox") != "queue" or store.get("remaining", 0) <= 0:
+    if store.get("delivery", "inbox") != "queue" or not available(store.get("remaining", 0)):
         return
     pending = store.pending()
     if not pending:
@@ -380,12 +381,12 @@ def dispatch(store, config):
     # Claim and debit atomically: read --ack cannot race an unclaimed message.
     with store.db:
         store.db.execute("BEGIN IMMEDIATE")
-        if store.get("delivery") != "queue" or store.get("remaining", 0) <= 0:
+        if store.get("delivery") != "queue" or not available(store.get("remaining", 0)):
             return
         claimed = store.db.execute("UPDATE messages SET status='forwarding' WHERE peer=? AND id=? AND status='received'", (row["peer"], row["id"]))
         if not claimed.rowcount:
             return
-        store.db.execute("UPDATE meta SET value=? WHERE key='remaining'", (json.dumps(store.get("remaining") - 1),))
+        store.db.execute("UPDATE meta SET value=? WHERE key='remaining'", (json.dumps(spend(store.get("remaining"))),))
     try:
         thread_info(config["codex_home"], config["thread"])
         result = subprocess.run([config["codex_bin"], "queue", "--thread", config["thread"],
@@ -409,7 +410,7 @@ def wake_idle(store, config):
     with store.db:
         store.db.execute("BEGIN IMMEDIATE")
         wakes = store.get("wake_remaining", store.get("remaining", 0))
-        if store.get("phase") != "idle" or store.get("remaining", 0) <= 0 or wakes <= 0 or store.get("wake_pending"):
+        if store.get("phase") != "idle" or not available(store.get("remaining", 0)) or not available(wakes) or store.get("wake_pending"):
             return
         row = None
         enrolled = all_peers(config)
@@ -426,7 +427,7 @@ def wake_idle(store, config):
             return
         marker = {"id": row["id"], "status": "writing", "at": time.time()}
         store.db.execute("INSERT OR REPLACE INTO meta VALUES ('wake_pending',?)", (json.dumps(marker),))
-        store.db.execute("INSERT OR REPLACE INTO meta VALUES ('wake_remaining',?)", (json.dumps(wakes - 1),))
+        store.db.execute("INSERT OR REPLACE INTO meta VALUES ('wake_remaining',?)", (json.dumps(spend(wakes)),))
     record_wake(store, marker)
     notice = notice_text(row["id"])
     try:
@@ -489,7 +490,7 @@ def serve(state):
         store.db.execute("UPDATE messages SET status='queue_uncertain',detail='Bridge restarted during forwarding; no automatic retry' WHERE status='forwarding'")
         store.db.execute("UPDATE outgoing SET status='uncertain',detail='Bridge restarted during write' WHERE status='writing'")
     store.put("stop", False)
-    store.put("runtime", {"pid": os.getpid(), "identity": process_identity(os.getpid()), "socket": str(path), "protocol_version": 3})
+    store.put("runtime", {"pid": os.getpid(), "identity": process_identity(os.getpid()), "socket": str(path), "protocol_version": 4})
     store.put("rejected", 0)
     store.put("worker_error", None)
     worker_stop = threading.Event()
@@ -588,11 +589,9 @@ def serve(state):
                             peer_key, endpoint = clients[client][2:]
                             decoded = decode_frame(line, "uds:" + endpoint["socket"])
                             if decoded:
-                                # Bound disk growth from an accidental peer loop per session.
-                                if store.db.execute("SELECT count(*) FROM messages").fetchone()[0] < 1000:
-                                    store.accept(peer_key, decoded)
-                                else:
-                                    store.put("rejected", store.get("rejected", 0) + 1)
+                                # History is not a lifetime transport quota. In particular,
+                                # old consumed messages must never block new work or receipts.
+                                store.accept(peer_key, decoded)
                             else:
                                 store.put("rejected", store.get("rejected", 0) + 1)
                     except (OSError, ValueError):
@@ -693,6 +692,8 @@ def start_bridge(args, store, state):
         raise ValueError("Saved bridge belongs to another thread or Codex home")
     runtime = store.get("runtime")
     live = bool(runtime and process_identity(runtime["pid"]) == runtime["identity"])
+    from peer_budget import require_compatible_listener
+    require_compatible_listener(store, args.thread, args.budget)
     if live and previous["owner_identity"] != identity:
         raise ValueError("Existing listener still belongs to the previous owner; wait for it to exit")
     requested = None
@@ -739,13 +740,13 @@ def start_bridge(args, store, state):
     if not previous:
         store.put("delivery", args.delivery or "inbox")
     if args.budget is not None or not previous:
-        budget = max(0, min(args.budget if args.budget is not None else 12, 50))
+        budget = parse_budget(args.budget) if args.budget is not None else UNLIMITED
         store.put("remaining", budget)
         store.put("wake_remaining", budget)
         store.put("budget_limit", budget)
     from peer_registry import seed_lifecycle
     seed_lifecycle(store, args.state_root)
-    if live and runtime.get("protocol_version", 1) >= 3:
+    if live and runtime.get("protocol_version", 1) >= 4:
         return {"status": "already_running", **runtime, "peer_key": requested["key"] if requested else config["default_peer"]}
     if live:
         # Upgrade only this transport; no model process or thread is restarted.
@@ -788,7 +789,7 @@ def enable_supervision(state_root):
                 config['supervision'] = True
                 store.db.execute("UPDATE meta SET value=? WHERE key='config'", (json.dumps(config),))
             runtime = store.get('runtime')
-            if runtime and runtime.get('protocol_version', 1) < 3:
+            if runtime and runtime.get('protocol_version', 1) < 4:
                 if process_identity(runtime['pid']) == runtime['identity']:
                     os.kill(runtime['pid'], signal.SIGTERM)
             enabled += 1
@@ -825,7 +826,7 @@ def cli():
     p.add_argument("--recover", action="store_true", help=argparse.SUPPRESS)
     p.add_argument("--socket-dir", type=Path, default=None)
     p.add_argument("--delivery", choices=("inbox", "live", "auto", "queue"))
-    p.add_argument("--budget", type=int)
+    p.add_argument("--budget", type=parse_budget, help="Incoming messages/wakes: unlimited (new connections), or 0–50")
     p = sub.add_parser("status")
     p.add_argument("target", nargs="?")
     p.add_argument("--current", action="store_true")
@@ -859,7 +860,7 @@ def cli():
     p = sub.add_parser("delivery")
     p.add_argument("mode", choices=("inbox", "live", "auto", "queue"))
     p.add_argument("--to", dest="delivery_target", help="Change this named Codex recipient's incoming window; otherwise change the current thread")
-    p.add_argument("--budget", type=int)
+    p.add_argument("--budget", type=parse_budget, help="Incoming messages/wakes: unlimited, or an optional 0–50 window")
     args = parser.parse_args()
     if args.command == 'status' and args.status_thread:
         args.thread, args.current = args.status_thread, True
