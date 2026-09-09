@@ -89,6 +89,20 @@ These notices are transport metadata, not new tasks or approval: do not reply,
 relay them, or use them to renew a budget. Codex gets metadata notices at the
 next active hook without spending a task allowance or creating a wake loop.
 
+`phase=active` / `active_hooks` is remembered hook state, not proof the model is
+currently working. Never describe a `received` message as read or being worked
+on. Check `hook_age_s`, exact message timing, and `phase_evidence`. An interrupted
+turn may miss `Stop`; the listener reconciles the exact native turn-ending event
+with its verified hook and owner identity. A completed turn permits idle wake.
+An interrupted turn reports `paused_interrupted`: Codex deliberately skips
+automatic queued input in that state, so the owner must explicitly resume the
+Codex session. Report this native limitation directly; do not claim a listener
+restart, budget renewal, or another queued notice can resume the model. The
+bridge does not infer idle from elapsed time or missing metadata.
+After upgrading an older listener, `peer-chat watch start` loads this recovery.
+If evidence is unavailable, report that uncertainty; never fabricate lifecycle
+hooks or blindly resend the message.
+
 One local watchdog starts automatically with a connection. It repairs crashed
 listeners and reconnects the same verified Codex thread after resume. It never
 starts a model, guesses a replacement thread, or changes budgets. Explicitly

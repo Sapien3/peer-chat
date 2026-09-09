@@ -24,7 +24,7 @@ import peer_platform as pp
 
 DB_TIMEOUT = 0.2
 META_KEYS = ("config", "runtime", "delivery", "remaining", "wake_remaining", "budget_limit", "phase",
-             "hook_seen", "hook_rejected", "stop", "worker_error", "restore_error", "wake_pending", "last_wake", "default_peer", "watch")
+             "hook_seen", "hook_rejected", "stop", "worker_error", "restore_error", "wake_pending", "last_wake", "default_peer", "watch", "lifecycle_reconciled")
 NON_CONSUMED = ("received", "queued", "hook_offered", "held", "forwarding", "queue_failed", "queue_uncertain")
 REACHABLE_STATES = ("active_hooks", "idle_wake_enabled")  # idle_live_only cannot wake the model
 RUNTIME_STATES = ("running", "listener_down", "owner_offline", "stopped", "unconfigured", "unreadable")
@@ -213,12 +213,23 @@ def _warning(row: dict) -> Optional[str]:
     if ds == "awaiting_lifecycle_hook":
         return ("Verified hook readiness is not available for this Codex process, so messages wait in the inbox: run peer-chat-setup once if never done, "
                 "resume the thread if the process predates setup, or type a first prompt in a new tab; the watchdog reconnects automatically")
+    if ds == 'awaiting_listener_upgrade':
+        return 'The native turn ended, but this listener predates interruption recovery. Run peer-chat watch start to upgrade the transport.'
+    if ds == 'paused_interrupted':
+        return ('Codex reports an interrupted turn and does not automatically start queued messages in this state. '
+                'The inbox is retained; explicitly resume the session in its Codex tab. '
+                'Restarting the listener, renewing a budget, or resending will not resume the model.')
     if ds == "paused_wake_budget":
         return "Wake budget exhausted: an idle Codex will not be woken until the owner's next prompt renews it"
     if ds == "idle_live_only":
         return "Live mode cannot wake an idle model: messages wait for its next tool call or prompt (set `peer-chat delivery auto` to enable wake)"
     if ds == "after_turn_queue":
         return "Queue mode: delivery happens only after the current turn ends"
+    if (ds == 'active_hooks' and row.get('pending_by_status', {}).get('received')
+            and (row.get('pending_age_s_by_status', {}).get('received') or 0) >= 60
+            and (row.get('hook_age_s') or 0) >= 60):
+        return (f"Message retained awaiting a new hook; last matched hook was {row['hook_age_s']} seconds ago. "
+                "Active hook state does not prove the model is currently working.")
     if row.get("outgoing_uncertain"):
         return f"{row['outgoing_uncertain']} outgoing write(s) uncertain; check `peer-chat status` before resending"
     if row.get('runtime_state') == 'running' and row.get('supervision_enabled') is False:
@@ -247,7 +258,7 @@ def snapshot(state_root, thread) -> Optional[dict]:
            "notice_failures": [],
            "received_total": None, "acknowledged_total": None,
            "remaining": None, "wake_remaining": None, "wake_remaining_effective": None, "wake_remaining_source": None,
-           "budget_limit": None, "phase": "unknown", "evidence_stale": False, "orphan": False,
+           "budget_limit": None, "phase": "unknown", "phase_evidence": None, "evidence_stale": False, "orphan": False,
            "hook_seen": None, "hook_rejected": None, "hook_age_s": None, "peers": [], "default_peer": None, "default_peer_short": None,
            "runtime_pid": None, "owner_pid": None, "listener_alive": False, "socket_ok": False,
            "worker_error": None, "restore_error": None,
@@ -274,8 +285,27 @@ def snapshot(state_root, thread) -> Optional[dict]:
     runtime = meta.get("runtime") if isinstance(meta.get("runtime"), dict) else None
     row["runtime_state"], row["listener_alive"] = _runtime_state(meta)
     row["socket_ok"] = bool(config) and _socket_ok(config.get("socket"))
+    if row['runtime_state'] == 'running':
+        seen = meta.get('hook_seen') or {}
+        if meta.get('phase') in ('active', 'idle'):
+            from peer_lifecycle import turn_end_evidence
+            evidence = turn_end_evidence(config, seen)
+            if evidence:
+                meta['phase'] = 'interrupted' if evidence['event'] == 'turn_aborted' else 'idle'
+                row['phase_evidence'] = evidence
+        else:
+            evidence = meta.get('lifecycle_reconciled')
+            if (isinstance(evidence, dict) and isinstance(seen, dict)
+                    and evidence.get('turn') == seen.get('turn')
+                    and evidence.get('hook_at') == seen.get('at')
+                    and evidence.get('owner_identity') == (config or {}).get('owner_identity')):
+                row['phase_evidence'] = evidence
     row["delivery_configured"] = _delivery_state(meta)
     row["delivery_state"] = row["delivery_configured"] if row["runtime_state"] == "running" else row["runtime_state"]
+    if (row['phase_evidence'] and row['runtime_state'] == 'running'
+            and (runtime or {}).get('protocol_version', 1) < 6
+            and row['delivery_state'] == 'idle_wake_enabled'):
+        row['delivery_state'] = 'awaiting_listener_upgrade'
     row["pending_by_status"] = {k: v for k, v in pending.items() if k != "consumed"}
     row["pending_count"] = sum(v for k, v in pending.items() if k in NON_CONSUMED or k not in ("consumed",))
     row['received_total'] = sum(pending.values())
@@ -297,7 +327,7 @@ def snapshot(state_root, thread) -> Optional[dict]:
         # The runtime treats a missing wake window as "same as remaining" (legacy stores).
         row["wake_remaining_effective"], row["wake_remaining_source"] = row["remaining"], "legacy_fallback"
     phase = meta.get("phase")
-    row["phase"] = phase if phase in ("idle", "active", "unknown") else "unknown"
+    row["phase"] = phase if phase in ("idle", "active", "interrupted", "unknown") else "unknown"
     row["evidence_stale"] = row["runtime_state"] != "running" and (row["phase"] != "unknown" or isinstance(meta.get("hook_seen"), dict))
     row["orphan"] = row["runtime_state"] == "unconfigured" and not pending
     seen = meta.get("hook_seen")

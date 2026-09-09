@@ -86,6 +86,8 @@ def delivery_state(store):
     mode = store.get("delivery", "inbox")
     if mode == "inbox":
         return "manual_inbox"
+    if store.get('phase') == 'interrupted':
+        return 'paused_interrupted'
     if not available(store.get("remaining", 0)):
         return "paused_budget"
     if mode == "queue":

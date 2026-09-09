@@ -161,6 +161,20 @@ Explicit zero stays disabled. Status displays `unlimited` or reports
 `awaiting_lifecycle_hook` still requires verified hooks, regardless of budget.
 Inbox history has no lifetime message-count cutoff; retained messages and
 receipts continue accumulating on disk for inspection and deduplication.
+If an interruption or completion misses the `Stop` hook, the listener checks
+native turn-ending metadata from a bounded tail of the registered Codex rollout.
+Only an ending for the exact turn and live owner recorded by a verified hook
+corrects the recorded phase. A completed turn restores idle delivery; an
+interrupted turn reports `paused_interrupted`, because Codex deliberately does
+not auto-start queued input while interrupted. Explicitly resume that session in
+Codex to process retained messages. Neither a budget refill nor a listener
+restart resumes the model. A newer turn, partial record, changed owner, or missing
+proof prevents reconciliation. No age-based idle inference or synthetic hooks
+are used. Status exposes this evidence as `phase_evidence`; `active_hooks` alone
+means delivery is waiting for a hook, not proof that the model is working.
+Existing installations load this recovery with `peer-chat watch start` after
+upgrading; hook definitions and their trust configuration do not change.
+
 Hooks cap each delivery at four messages and 18,000 characters. Oversized
 messages get an exact-id read reference. `hook_offered`, `queued`, and `written`
 are transport states; only explicit acknowledgement marks `consumed`.
@@ -317,7 +331,7 @@ uv build
 ```
 
 Build a colleague bundle from a tested wheel with
-`python3 scripts/package_share.py dist/local_peer_chat-0.6.0-py3-none-any.whl`.
+`python3 scripts/package_share.py dist/local_peer_chat-0.6.1-py3-none-any.whl`.
 It includes the wheel, installer, quick start, reference and checksums. Nothing
 is published to a package index. Ordinary tests use fixtures and never launch
 a model. Native configuration probes are separate and use temporary homes.

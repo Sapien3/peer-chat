@@ -38,3 +38,17 @@ unknown. Continuous delivery is the default for new connections; optional finite
 message/wake windows pause when exhausted. Burst tests exercise more than 1,000
 real socket arrivals, deduplication and receipts after acknowledged history,
 plus more than 50 hook deliveries and idle wake cycles without owner renewal.
+
+
+Interrupted-turn recovery tests use native-shaped terminal records from the
+registered rollout. They cover exact turn/owner matching, missing hook evidence,
+new activity, partial and malformed appends, stopped/offline owners, bounded
+reads, read-only status, and races between observation and state correction.
+They assert that reconciliation does not renew budgets, acknowledge messages,
+or fabricate a Stop hook. Completion uses the existing one-notice wake path;
+interruption remains paused until explicit owner activity. A native interrupted
+session was observed retaining the queued notice without starting a turn.
+Codex 0.153.4 explicitly excludes AgentStatus::Interrupted in its queue watcher:
+https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/ext/queue/src/service.rs. The native Interrupt event is documented at
+https://learn.chatgpt.com/docs/hooks#interrupt; existing hook definitions are
+unchanged by this recovery.

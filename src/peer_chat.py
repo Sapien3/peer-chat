@@ -363,6 +363,8 @@ def dispatch(store, config):
         with store.db:
             store.db.execute("UPDATE outgoing SET status=?,detail=? WHERE id=?", (status, detail, row["id"]))
         return
+    if store.get('phase') == 'interrupted':
+        return
     if store.get("delivery") == "auto":
         wake_idle(store, config)
         return
@@ -490,7 +492,7 @@ def serve(state):
         store.db.execute("UPDATE messages SET status='queue_uncertain',detail='Bridge restarted during forwarding; no automatic retry' WHERE status='forwarding'")
         store.db.execute("UPDATE outgoing SET status='uncertain',detail='Bridge restarted during write' WHERE status='writing'")
     store.put("stop", False)
-    store.put("runtime", {"pid": os.getpid(), "identity": process_identity(os.getpid()), "socket": str(path), "protocol_version": 4})
+    store.put("runtime", {"pid": os.getpid(), "identity": process_identity(os.getpid()), "socket": str(path), "protocol_version": 6})
     store.put("rejected", 0)
     store.put("worker_error", None)
     worker_stop = threading.Event()
@@ -503,6 +505,10 @@ def serve(state):
                 current = work_store.get("config")
                 owner_live = process_identity(current["owner_pid"]) == current["owner_identity"]
                 if current.get("supervision") and time.monotonic() >= next_notice:
+                    if (owner_live and work_store.get('phase') in ('active', 'idle')
+                            and work_store.db.execute("SELECT 1 FROM messages WHERE kind='message' AND status='received' LIMIT 1").fetchone()):
+                        from peer_lifecycle import reconcile
+                        reconcile(work_store, current)
                     from peer_delivery import notify
                     notify(work_store, current, state.parent)
                     next_notice = time.monotonic() + 1
@@ -746,7 +752,7 @@ def start_bridge(args, store, state):
         store.put("budget_limit", budget)
     from peer_registry import seed_lifecycle
     seed_lifecycle(store, args.state_root)
-    if live and runtime.get("protocol_version", 1) >= 4:
+    if live and runtime.get("protocol_version", 1) >= 6:
         return {"status": "already_running", **runtime, "peer_key": requested["key"] if requested else config["default_peer"]}
     if live:
         # Upgrade only this transport; no model process or thread is restarted.
@@ -789,7 +795,7 @@ def enable_supervision(state_root):
                 config['supervision'] = True
                 store.db.execute("UPDATE meta SET value=? WHERE key='config'", (json.dumps(config),))
             runtime = store.get('runtime')
-            if runtime and runtime.get('protocol_version', 1) < 4:
+            if runtime and runtime.get('protocol_version', 1) < 6:
                 if process_identity(runtime['pid']) == runtime['identity']:
                     os.kill(runtime['pid'], signal.SIGTERM)
             enabled += 1
@@ -882,6 +888,7 @@ def cli():
                 observed = snapshot(args.state_root, row['thread'])
                 if observed:
                     row.update(delivery_state=observed['delivery_state'], remaining=observed['remaining'],
+                               phase=observed['phase'], phase_evidence=observed['phase_evidence'],
                                pending_count=observed['pending_count'], warning=observed['warning'])
         print(json.dumps(rows, ensure_ascii=False) if args.json else render_sessions(rows))
         return

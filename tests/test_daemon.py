@@ -317,6 +317,54 @@ def test_connect_upgrades_old_listener_preserving_finite_budget(bridge):
         saved['protocol_version'] = 3
         db.execute("UPDATE meta SET value=? WHERE key='runtime'", (json.dumps(saved),))
     replacement = start()
-    assert replacement['pid'] != runtime['pid'] and replacement['protocol_version'] == 4
+    assert replacement['pid'] != runtime['pid'] and replacement['protocol_version'] == 6
     assert cli('status')['remaining'] == 7
     assert cli('delivery', 'auto', '--budget', 'unlimited')['budget'] == 'unlimited'
+
+
+@pytest.mark.parametrize('terminal', ['task_complete', 'turn_aborted'])
+def test_listener_reconciles_terminal_state_without_owner_prompt(bridge, terminal):
+    from datetime import datetime, timezone
+    cli, start, runtime, wire, connect, root = bridge
+    database = next((root / 'state').glob('*/inbox.sqlite'))
+    rollout = root / 'interrupted.jsonl'
+    turn = str(uuid.uuid4())
+    at = time.time() - 10
+    rollout.write_text(json.dumps({'timestamp': datetime.fromtimestamp(at + 2, timezone.utc).isoformat(),
+        'type': 'event_msg', 'payload': {'type': terminal, 'turn_id': turn}}) + '\n')
+    native = root / 'queue-fixture'
+    queue_log = root / 'queue.jsonl'
+    native.write_text(f'#!{sys.executable}\nimport json,sys\nwith open({str(queue_log)!r}, "a") as f: f.write(json.dumps(sys.argv[1:]) + "\\n")\n')
+    native.chmod(0o700)
+    with sqlite3.connect(root / 'codex/state_5.sqlite') as db:
+        db.execute('ALTER TABLE threads ADD COLUMN rollout_path TEXT')
+        db.execute('UPDATE threads SET rollout_path=?', (str(rollout),))
+    with sqlite3.connect(database) as db:
+        config = json.loads(db.execute("SELECT value FROM meta WHERE key='config'").fetchone()[0])
+        config['codex_bin'] = str(native)
+        seen = {'event': 'UserPromptSubmit', 'routing': 'matched', 'turn': turn,
+                'at': at, 'owner_identity': config['owner_identity']}
+        for key, value in (('config', config), ('phase', 'active'), ('hook_seen', seen)):
+            db.execute('INSERT OR REPLACE INTO meta VALUES (?,?)', (key, json.dumps(value)))
+    cli('delivery', 'auto', '--budget', '40')
+    mid = str(uuid.uuid4())
+    with connect() as client:
+        client.sendall(wire('retained message after interruption', mid=mid))
+    if terminal == 'turn_aborted':
+        eventually(lambda: cli('status')['delivery_state'] == 'paused_interrupted')
+        time.sleep(1.2)
+        assert not queue_log.exists()
+        assert cli('read')[0]['status'] == 'received'
+        assert cli('status')['wake_remaining'] == 40
+        return
+    eventually(lambda: queue_log.exists())
+    eventually(lambda: cli('status')['wake_evidence']['last']['state'] == 'queued')
+    status = cli('status')
+    assert status['phase'] == 'idle' and status['phase_evidence']['event'] == 'task_complete'
+    assert status['remaining'] == 40 and status['wake_remaining'] == 39
+    assert status['hook_seen']['event'] == 'UserPromptSubmit'
+    assert cli('read')[0]['status'] == 'received'
+    time.sleep(1.2)  # Several dispatcher ticks must not queue the same notice again.
+    notices = queue_log.read_text().splitlines()
+    assert len(notices) == 1 and mid in notices[0]
+    assert 'retained message after interruption' not in notices[0]
